@@ -1,0 +1,393 @@
+import numpy as np
+from sklearn.model_selection import train_test_split
+from pmlb import fetch_data, classification_dataset_names
+import time
+
+def create_X_Y(m,n):
+    
+    X = np.random.randint(2, size=(m,n))
+    Y = np.zeros(m, dtype=int)
+    for i in range(m):
+        Y[i] = X[i, 1] and X[i, 10] and  X[i, 2] and (( X[i, 3] or not X[i, 4] or X[i, 5]) or X[i, 11] and (X[i, 12] or X[i, 13] or X[i, 14] or X[i, 20] and X[i, 21] and (X[i,30] or not X[i,31])))
+    
+    return X, Y
+
+
+def reset(i,m,n):
+    global TX, TnX, TXY, TXnY, TnXY, TnXnY, op_and, and_n, op_or, or_n
+    
+    TX[i,:] = np.zeros((1,n), dtype=int)
+    TnX[i,:] = np.zeros((1,n), dtype=int)
+    TXY[i,:] = np.zeros((1,n), dtype=int)
+    TnXY[i,:] = np.zeros((1,n), dtype=int)
+    TXnY[i,:] = np.zeros((1,n), dtype=int)
+    TnXnY[i,:] = np.zeros((1,n), dtype=int)
+    
+    return
+
+def initialize_PLUSr(nm, m, n):
+    global L, TX, TnX, TXY, TXnY, TnXY, TnXnY, op_and, and_n, op_or, or_n
+
+    L = np.ones((m,1), dtype=int)
+    TX = np.zeros((nm,n), dtype=int)
+    TnX = np.zeros((nm,n), dtype=int)
+    TXY = np.zeros((nm,n), dtype=int)
+    TnXY = np.zeros((nm,n), dtype=int)
+    TXnY = np.zeros((nm,n), dtype=int)
+    TnXnY = np.zeros((nm,n), dtype=int)
+    op_and = np.zeros((nm,n), dtype=int)
+    and_n = np.zeros((nm,n), dtype=int)
+    op_or = np.zeros((nm,n), dtype=int)
+    or_n = np.zeros((nm,n), dtype=int)
+    
+    return
+
+
+def reset_count(i, m, n, X, LL, Y, beta):
+    global TX, TnX, TXY, TXnY, TnXY, TnXnY, op_and, and_n, op_or, or_n
+    
+    L = np.reshape(LL, (m,1))
+    TX[i,:] = np.reshape(np.sum(X*L, axis=0), (1,n))
+    TnX[i,:] = np.reshape(np.sum((1-X)*L, axis=0), (1,n))
+    TXY[i,:] = np.reshape(np.sum(X*Y*L, axis=0), (1,n))
+    TnXY[i,:] = np.reshape(np.sum((1-X)*Y*L, axis=0), (1,n))
+    TXnY[i,:] = np.reshape(np.sum(X*(1-Y)*L, axis=0), (1,n))
+    TnXnY[i,:] = np.reshape(np.sum((1-X)*(1-Y)*L, axis=0), (1,n))
+    
+    op_and[i,:] = np.reshape((np.reshape(((TnX[i,:]-TnX[i,:]//beta[i])>0)*(TnXnY[i,:] >= (TnX[i,:]-TnX[i,:]//beta[i])), (1,n)) + np.reshape(((TX[i,:]-TX[i,:]//beta[i])>0)*(TXnY[i,:] >= (TX[i,:]-TX[i,:]//beta[i])), (1,n))), (1,n))
+    and_n[i,:] = np.reshape(((TnX[i,:]-TnX[i,:]//beta[i])>0)*(TnXnY[i,:] >= TnX[i,:]-TnX[i,:]//beta[i]), (1,n))
+    op_or[i,:] = np.reshape((np.reshape(((TX[i,:]-TX[i,:]//beta[i])>0)*(TXY[i,:] >= (TX[i,:]-TX[i,:]//beta[i])), (1,n)) + np.reshape(((TnX[i,:]-TnX[i,:]//beta[i])>0)*(TnXY[i,:] >= (TnX[i,:]-TnX[i,:]//beta[i])), (1,n))), (1,n))
+    or_n[i,:] = np.reshape(((TnX[i,:]-TnX[i,:]//beta[i])>0)*(TnXY[i,:] >= TnX[i,:]-TnX[i,:]//beta[i]), (1,n))
+    
+    return
+        
+
+def PLUSr(i, nm, m, n, X):
+    global TX, TnX, TXY, TXnY, TnXY, TnXnY, op_and, and_n, op_or, or_n
+    
+    n_Z = np.ones((m,nm), dtype=int)
+    Z = np.zeros((m,nm), dtype=int) 
+    
+    for k in range(m):
+        start = True
+            
+        for j in range(n):
+            if op_and[i,j] >= 1 and start:
+                n_Z[k,i] = (X[k,j] != (and_n[i,j] > 0))
+                start = False
+            elif op_and[i,j] >= 1:
+                n_Z[k,i] = n_Z[k,i] or (X[k, j] != (and_n[i,j] > 0))
+                
+        if not start:
+            Z[k,i] = not n_Z[k,i]
+            
+        for j in range(n):
+            if op_or[i,j] >= 1 and start:
+                Z[k,i] = X[k,j] != (or_n[i,j] > 0)
+                start = False
+            elif op_or[i,j] >= 1:
+                Z[k,i] = Z[k,i] or X[k, j] != (or_n[i,j] > 0)
+              
+    return Z[:,i]
+
+
+def print_PLUSr_Bool_Eq(i, m, n):
+    global op_and, and_n, op_or, or_n
+    
+    if np.all(op_and[i,:] == 0) and np.all(op_or[i,:] == 0):
+        print('0', end = '')
+        return
+    
+    count = 0
+    for j in range(n):
+        count = count + 1 if op_or[i,j] >= 1 else count
+    count_save = count
+    if 0 < count <= 200:
+        for j in range(n):
+            if op_or[i,j] >= 1:
+                count -= 1
+                if or_n[i,j]:
+                    print('not ', end = '')
+                print('X[',j, end = '')
+                if count <= 0:
+                    print(']', end = '')
+                else:
+                    print('] or ', end = '')
+    elif count > 200:
+        print(' > 200 Variables', end = '')
+            
+    count = 0
+    for j in range(n):
+        count = count + 1 if op_and[i,j] >= 1 else count
+    if count >= 1 and count_save >= 1:
+        print(' Or (', end = '')
+    if count >= 1:
+        if 0 < count <= 200:
+            for j in range(n):
+                if op_and[i,j] >= 1:
+                    count -= 1
+                    if 1 - and_n[i,j]:
+                        print('not ', end = '')
+                    print('X[',j, end = '')
+                    if count <= 0:
+                        if count_save >= 1:
+                            print('])', end = '')
+                        else:
+                            print(']', end = '')
+                    else:
+                        print('] and ', end = '')
+        elif count > 200:
+            print(' > 200 Variables', end = '')
+    
+    return
+
+
+def PLUSr_print(i, m, Y, Z):
+    global y, beta, aamax
+    
+    winner = 0    
+    aa = np.sum(join(i, m, Z) == Y)
+
+    AA = aa / m
+    if aa > aamax:
+        print()
+        print('DNA Category =', y)
+        print('beta =', beta)
+        aamax = aa
+        print('Test 1 Accuracy =', aa, end = '')
+        print('/', m, end = '')
+        print(' =', aa/m)
+
+        print("The", i+1 , end = "")
+        print(" PLUSr's ", end = '')
+        print('Boolean Expression = ', end = '')
+        if i >= 0:
+            print('( ', end = '')
+            print_PLUSr_Bool_Eq(0, m, n)
+        if i >= 1:
+            print(' ) and ( ( ', end = '')
+            print_PLUSr_Bool_Eq(1, m, n)
+        if i >= 2:
+            print(' ) or ( ( ', end = '')
+            print_PLUSr_Bool_Eq(2, m, n)
+        if i >= 3:
+            print(' )  and ( ( ', end = '')
+            print_PLUSr_Bool_Eq(3, m, n)
+        if i >= 4:
+            print(' ) or ( ( ', end = '')
+            print_PLUSr_Bool_Eq(4, m, n)
+        if i >= 5:
+            print(' ) and ( ( ', end = '')
+            print_PLUSr_Bool_Eq(5, m, n)
+        if i >= 6:
+            print(' ) or ( ( ', end = '')
+            print_PLUSr_Bool_Eq(6, m, n)
+        if i >= 7:
+            print(' ) and ( ( ', end = '')
+            print_PLUSr_Bool_Eq(7, m, n)
+        if i >= 8:
+            print(' ) or ( ( ', end = '')
+            print_PLUSr_Bool_Eq(8, m, n)
+        if i >= 8:
+            print(' )', end = '')
+        if i >= 7:
+            print(' )', end = '')
+        if i >= 6:
+            print(' )', end = '')
+        if i >= 5:
+            print(' )', end = '')
+        if i >= 4:
+            print(' )', end = '')
+        if i >= 3:
+            print(' )', end = '')
+        if i >= 2:
+            print(' )', end = '')
+        if i >= 1:
+            print(' )', end = '')
+        if i >= 0:
+            print(' )')
+        winner = 1
+    return winner
+
+
+def join(i, m, Z):
+    
+    if i == 8:
+        Zf = np.reshape(Z[:,0] * (1 - (1 - Z[:,1]) * (1 - Z[:,2] *(1 - (1 - Z[:,3])*(1-Z[:,4]*(1 - (1 - Z[:,5])*(1 - Z[:,6]*(1 - (1 - Z[:,7])*(1 - Z[:,8])))))))), (m,1))
+    if i == 7:
+        Zf = np.reshape(Z[:,0] * (1 - (1 - Z[:,1]) * (1 - Z[:,2] *(1 - (1 - Z[:,3])*(1-Z[:,4]*(1 - (1 - Z[:,5])*(1 - Z[:,6]*Z[:,7])))))), (m,1))
+    if i == 6:
+        Zf = np.reshape(Z[:,0] * (1 - (1 - Z[:,1]) * (1 - Z[:,2] *(1 - (1 - Z[:,3])*(1-Z[:,4]*(1 - (1 - Z[:,5])*(1 - Z[:,6])))))), (m,1))
+    elif i == 5:
+        Zf = np.reshape(Z[:,0] * (1 - (1 - Z[:,1]) * (1 - Z[:,2] *(1 - (1 - Z[:,3])*(1-Z[:,4]*Z[:,5])))), (m,1))
+    elif i == 4:
+        Zf = np.reshape(Z[:,0] * (1 - (1 - Z[:,1]) * (1 - Z[:,2] *(1 - (1 - Z[:,3])*(1-Z[:,4])))), (m,1))
+    elif i == 3:
+        Zf = np.reshape(Z[:,0] * (1 - (1 - Z[:,1]) * (1 - Z[:,2] *Z[:,3])), (m,1))
+    elif i == 2:
+        Zf = np.reshape(Z[:,0] * (1 - (1 - Z[:,1]) * (1 - Z[:,2])), (m,1))
+    elif i == 1:
+        Zf = np.reshape(Z[:,0] * Z[:,1], (m,1))
+    elif i == 0:
+        Zf = np.reshape(Z[:,0], (m,1))
+            
+    return Zf
+    
+    
+def check(i, m, Z, Y):
+    
+    aa = np.sum(join(i, m, Z) == Y)
+        
+    print('Test 2 Accuracy =', aa, end = '')
+    print('/', m, end = '')
+    print(' =', aa/m)
+    
+    return
+
+
+def test_print(i):
+    global nm, n, m_test1, m_test2, test1_X, test1_Y, test2_Y, test1_Z, test2_Z
+    
+    for ii in range(i+1):
+        test1_Z[:,ii] = PLUSr(ii, nm, m_test1, n, test1_X)
+
+    w = PLUSr_print(i, m_test1, test1_Y, test1_Z)
+    if w:
+        for ii in range(i+1):
+            test2_Z[:,ii] = PLUSr(ii, nm, m_test2, n, test2_X)
+        check(i, m_test2, test2_Z, test2_Y)
+        
+    return
+
+
+# Read in the datasets and split them into training/testing1/testing2
+dna_X, dna_y = fetch_data('dna', return_X_y=True, local_cache_dir='C:/Users/edwar/Documents/PLUSr/dataset')
+train_X_org, test1_X, train_y_org, test1_y_org = train_test_split(dna_X, dna_y, random_state=0)
+train_X, test2_X, train2_y_org, test2_y_org = train_test_split(train_X_org, train_y_org, random_state=0)
+train_y = np.reshape(train2_y_org, (train_X.shape[0],1))
+test1_y = np.reshape(test1_y_org, (test1_X.shape[0],1))
+test2_y = np.reshape(test2_y_org, (test2_X.shape[0],1))
+
+m = train_X.shape[0]
+m_test1 = test1_X.shape[0]
+m_test2 = test2_X.shape[0]
+n = train_X.shape[1]
+
+'''
+m = 200000
+m_test1 = 1000
+m_test2 = 1000
+n = 100
+train_X, train_y = create_X_Y(m,n)
+test1_X, test1_y = create_X_Y(m_test1,n)
+test2_X, test2_y = create_X_Y(m_test2,n)
+'''
+
+nm = 9
+beta = np.ones(nm, dtype=int)
+base = 2
+Z = np.zeros((m,nm), dtype=int)
+test1_Z = np.zeros((m_test1,nm), dtype=int)
+test2_Z = np.zeros((m_test2,nm), dtype=int)
+
+print('Start')
+
+start_time = time.time()
+for cat in range(1,4):
+    y = cat
+    initialize_PLUSr(nm, m, n)
+    train_Y = np.reshape(train_y==y, (m, 1))
+    test1_Y = np.reshape(test1_y==y, (m_test1, 1))
+    test2_Y = np.reshape(test2_y==y, (m_test2, 1))
+    
+    aamax = 0
+    for beta0 in range(10):
+        print('i = 0,  beta =',beta0)
+        beta[0] = m // (base ** beta0)
+        
+        reset_count(0, m, n, train_X, L, train_Y, beta)
+        Z[:,0] = PLUSr(0, nm, m, n, train_X)
+        
+        if np.any(Z[:,0] == 1):
+            
+            for beta1 in range(10):
+                print('i = 0, i = 1,  beta =', beta0, beta1)
+                beta[1] = m // (base ** beta1) 
+
+                reset_count(1, m, n, train_X, Z[:,0], train_Y, beta)
+                Z[:,1] = PLUSr(1, nm, m, n, train_X)
+
+                if np.any(Z[:,1] == 0):
+            
+                    for beta2 in range(10):
+                        #print('i = 0, i = 1, i = 2,  beta =', beta0, beta1, beta2)
+                        beta[2] = m // (base ** beta2)
+
+                        reset_count(2, m, n, train_X, 1-Z[:,1], train_Y, beta)
+                        Z[:,2] = PLUSr(2, nm, m, n, train_X)
+
+                        if np.any(Z[:,2] == 1):
+                
+                            for beta3 in range(10):
+                                #print('i = 0, i = 1, i = 2, i = 3,  beta =', beta0, beta1, beta2,beta3)
+                                beta[3] = m // (base ** beta3)
+
+                                reset_count(3, m, n, train_X, Z[:,2], train_Y, beta)
+                                Z[:,3] = PLUSr(3, nm, m, n, train_X)
+
+                                if np.any(Z[:,3] == 0):
+                               
+                                    for beta4 in range(10):
+                                        #print('i = 0, i = 1, i = 2, i = 3, i = 4,  beta =', beta0, beta1, beta2,beta3, beta4)
+                                        beta[4] = m // (base ** beta4)
+
+                                        reset_count(4, m, n, train_X, 1-Z[:,3], train_Y, beta)
+                                        Z[:,4] = PLUSr(4, nm, m, n, train_X)
+
+                                        if np.any(Z[:,4] == 1):
+                              
+                                            for beta5 in range(10):
+                                                #print('i = 0, i = 1, i = 2, i = 3, i = 4, i = 5,  beta =', beta0, beta1, beta2,beta3, beta4,beta5)
+                                                beta[5] = m // (base ** beta5)
+
+                                                reset_count(5, m, n, train_X, Z[:,4], train_Y, beta)
+                                                Z[:,5] = PLUSr(5, nm, m, n, train_X)
+
+                                                if np.any(Z[:,5] == 0):
+
+                                                    for beta6 in range(10):
+                                                        #print('i = 0, i = 1, i = 2, i = 3, i = 4, i = 5, i = 6,  beta =', beta0, beta1, beta2,beta3, beta4, beta5, beta6)
+                                                        beta[6] = m // (base ** beta6)
+
+                                                        reset_count(6, m, n, train_X, 1-Z[:,5], train_Y, beta)
+                                                        PLUSr(6, nm, m, n, train_X)
+
+                                                        if np.any(Z[:,6] == 1):
+                              
+                                                            for beta7 in range(10):
+                                                                #print('i = 0, i = 1, i = 2, i = 3, i = 4, i = 5, i = 6, i = 7,  beta =', beta0, beta1, beta2,beta3, beta4, beta5, beta6, beta7)
+                                                                beta[7] = m // (base ** beta7)
+
+                                                                reset_count(7, m, n, train_X, Z[:,6], train_Y, beta)
+                                                                Z[:,7] = PLUSr(7, nm, m, n, train_X)
+
+                                                                if np.any(Z[:,7] == 0):
+
+                                                                    for beta8 in range(10):
+                                                                        beta[8] = m // (base ** beta8)
+
+                                                                        reset_count(8, m, n, train_X, 1-Z[:,7], train_Y, beta)
+                                        
+                                                                        test_print(8)
+                                                                test_print(7)
+                                                        test_print(6)
+                                                test_print(5)
+                                        test_print(4)
+                                test_print(3)
+                        test_print(2)
+                test_print(1)
+        test_print(0)
+print('Total Time =', (time.time() - start_time)  / 86400, end = '')
+print(' days')
+print()      
+print('Done')
